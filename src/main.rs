@@ -1,28 +1,21 @@
 mod algorithm;
 mod b64u;
-mod jwt;
 mod crypto;
+mod jwt;
 
 use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
-
-
+use jsonwebtoken::dangerous::insecure_decode;
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 
 use serde::{Deserialize, Serialize};
 
 const ISSUER: &str = "jwtgate";
-const TYPE: &str = "LWTv4";
-
-
-
-//
-// CLI
-//
 
 #[derive(Debug, Parser)]
 #[command(
@@ -60,19 +53,11 @@ enum Command {
     },
 
     /// Verify signature + token expiration
-    Verify {
-        token: String,
-    },
+    Verify { token: String },
 
     /// Decode a token WITHOUT verification
-    Inspect {
-        token: String,
-    },
+    Inspect { token: String },
 }
-
-//
-// JWT
-//
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Claims {
@@ -92,20 +77,12 @@ struct Claims {
     roles: Vec<String>,
 }
 
-//
-// Вот сюда потом воткнёшь LWT.
-//
-// JWT core вообще не обязан знать,
-// во что ты заворачиваешь итоговый JWT.
-//
-
 trait Envelope {
     fn seal(&self, jwt: &str) -> Result<String>;
 
     fn open(&self, token: &str) -> Result<String>;
 }
 
-/// Сейчас ничего не делает.
 /// JWT -> JWT.
 struct PlainEnvelope;
 
@@ -119,18 +96,10 @@ impl Envelope for PlainEnvelope {
     }
 }
 
-//
-// Main
-//
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Позже:
-    //
-    // let envelope = LwtEnvelope::new(...);
-    //
     let envelope = PlainEnvelope;
 
     match cli.command {
@@ -138,11 +107,7 @@ async fn main() -> Result<()> {
             init(&cli.key).await?;
         }
 
-        Command::Issue {
-            sub,
-            ttl,
-            roles,
-        } => {
+        Command::Issue { sub, ttl, roles } => {
             let key = load_key(&cli.key).await?;
 
             let jwt = issue(&key, sub, ttl, roles)?;
@@ -155,7 +120,6 @@ async fn main() -> Result<()> {
         Command::Verify { token } => {
             let key = load_key(&cli.key).await?;
 
-            // LWT -> JWT
             let jwt = envelope.open(&token)?;
 
             let claims = verify(&key, &jwt)?;
@@ -164,8 +128,6 @@ async fn main() -> Result<()> {
         }
 
         Command::Inspect { token } => {
-            // Если LWT потом будет зашифрован,
-            // здесь сначала будет envelope.open().
             let jwt = envelope.open(&token)?;
 
             inspect(&jwt)?;
@@ -175,31 +137,23 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-//
-// Commands
-//
-
 async fn init(path: &Path) -> Result<()> {
-    if tokio::fs::metadata(path).await.is_ok() {
-        bail!(
-            "key already exists: {}",
-            path.display()
-        );
-    }
+    use tokio::io::AsyncWriteExt;
 
-    //
-    // 256-bit random HMAC secret
-    //
     let mut key = [0u8; 32];
-
-    getrandom::fill(&mut key)
-        .map_err(|err| anyhow!("failed to generate random key: {err}"))?;
-
-    tokio::fs::write(path, key)
-        .await
-        .with_context(|| {
-            format!("failed to write {}", path.display())
-        })?;
+    getrandom::fill(&mut key).map_err(|err| anyhow!("failed to generate random key: {err}"))?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).await.with_context(|| {
+        format!(
+            "failed to create key {} (existing files are preserved)",
+            path.display()
+        )
+    })?;
+    file.write_all(&key).await?;
+    file.sync_all().await?;
 
     println!("generated key: {}", path.display());
 
@@ -207,14 +161,12 @@ async fn init(path: &Path) -> Result<()> {
 }
 
 async fn load_key(path: &Path) -> Result<Vec<u8>> {
-    let key = tokio::fs::read(path)
-        .await
-        .with_context(|| {
-            format!(
-                "failed to read key {}. Run `jwtgate init` first",
-                path.display()
-            )
-        })?;
+    let key = tokio::fs::read(path).await.with_context(|| {
+        format!(
+            "failed to read key {}. Run `jwtgate init` first",
+            path.display()
+        )
+    })?;
 
     if key.len() < 32 {
         bail!(
@@ -226,12 +178,7 @@ async fn load_key(path: &Path) -> Result<Vec<u8>> {
     Ok(key)
 }
 
-fn issue(
-    key: &[u8],
-    sub: String,
-    ttl: u64,
-    roles: Vec<String>,
-) -> Result<String> {
+fn issue(key: &[u8], sub: String, ttl: u64, roles: Vec<String>) -> Result<String> {
     let now = unix_time()?;
 
     let exp = now
@@ -248,33 +195,17 @@ fn issue(
 
     let header = Header::new(Algorithm::HS256);
 
-    let token = encode(
-        &header,
-        &claims,
-        &EncodingKey::from_secret(key),
-    )?;
+    let token = encode(&header, &claims, &EncodingKey::from_secret(key))?;
 
     Ok(token)
 }
 
-fn verify(
-    key: &[u8],
-    token: &str,
-) -> Result<Claims> {
-    //
-    // ВАЖНО:
-    // разрешаем только HS256.
-    //
-    // Не надо брать алгоритм из JWT
-    // и слепо ему доверять.
-    //
-    let validation = Validation::new(Algorithm::HS256);
+fn verify(key: &[u8], token: &str) -> Result<Claims> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.leeway = 0;
+    validation.set_issuer(&[ISSUER]);
 
-    let data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(key),
-        &validation,
-    )?;
+    let data = decode::<Claims>(token, &DecodingKey::from_secret(key), &validation)?;
 
     if data.claims.iss != ISSUER {
         bail!(
@@ -288,10 +219,6 @@ fn verify(
 }
 
 fn inspect(token: &str) -> Result<()> {
-    //
-    // Только декодирование.
-    // НИКАКОЙ проверки подписи.
-    //
     let data = insecure_decode::<Claims>(token)?;
 
     println!("algorithm: {:?}", data.header.alg);
@@ -301,21 +228,74 @@ fn inspect(token: &str) -> Result<()> {
     }
 
     println!();
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&data.claims)?
-    );
+    println!("{}", serde_json::to_string_pretty(&data.claims)?);
 
     println!();
-    println!("WARNING: token was NOT verified");
+    eprintln!("WARNING: token was NOT verified");
 
     Ok(())
 }
 
 fn unix_time() -> Result<u64> {
-    Ok(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_secs()
-    )
+    Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_and_wrong_key() {
+        let key = [7u8; 32];
+        let token = issue(&key, "alice".into(), 60, vec!["reader".into()]).unwrap();
+        let claims = verify(&key, &token).unwrap();
+        assert_eq!(claims.sub, "alice");
+        assert_eq!(claims.roles, ["reader"]);
+        assert!(verify(&[8u8; 32], &token).is_err());
+    }
+
+    #[test]
+    fn rejects_expired_issuer_and_other_algorithm() {
+        let key = [7u8; 32];
+        for (alg, issuer, exp) in [
+            (Algorithm::HS256, ISSUER, 1),
+            (Algorithm::HS256, "other", unix_time().unwrap() + 60),
+            (Algorithm::HS384, ISSUER, unix_time().unwrap() + 60),
+        ] {
+            let claims = Claims {
+                iss: issuer.into(),
+                sub: "alice".into(),
+                iat: 1,
+                exp,
+                roles: vec![],
+            };
+            let token =
+                encode(&Header::new(alg), &claims, &EncodingKey::from_secret(&key)).unwrap();
+            assert!(verify(&key, &token).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn key_creation_is_exclusive() {
+        let path = std::env::temp_dir().join(format!("jwt-lab-key-{}", std::process::id()));
+        assert!(!path.exists());
+        let result = async {
+            init(&path).await?;
+            let first = load_key(&path).await?;
+            assert!(init(&path).await.is_err());
+            assert_eq!(first, load_key(&path).await?);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path)?.permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        tokio::fs::remove_file(path).await.unwrap();
+        result.unwrap();
+    }
 }

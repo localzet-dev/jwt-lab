@@ -1,34 +1,25 @@
-const BLOCK_SIZE: usize = 64;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 pub fn hs256(key: &[u8], message: &[u8]) -> [u8; 32] {
-    let mut k = [0u8; BLOCK_SIZE];
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key size");
+    mac.update(message);
+    mac.finalize().into_bytes().into()
+}
 
-    if key.len() > BLOCK_SIZE {
-        let hashed = sha256(key);
-        k[..32].copy_from_slice(&hashed);
-    } else {
-        k[..key.len()].copy_from_slice(key);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rfc_4231_test_case_one() {
+        assert_eq!(
+            hs256(&[0x0b; 20], b"Hi There"),
+            [
+                0xb0, 0x34, 0x4c, 0x61, 0xd8, 0xdb, 0x38, 0x53, 0x5c, 0xa8, 0xaf, 0xce, 0xaf, 0x0b,
+                0xf1, 0x2b, 0x88, 0x1d, 0xc2, 0x00, 0xc9, 0x83, 0x3d, 0xa7, 0x26, 0xe9, 0x37, 0x6c,
+                0x2e, 0x32, 0xcf, 0xf7
+            ]
+        );
     }
-
-    let mut ipad = [0x36u8; BLOCK_SIZE];
-    let mut opad = [0x5cu8; BLOCK_SIZE];
-
-    for i in 0..BLOCK_SIZE {
-        ipad[i] ^= k[i];
-        opad[i] ^= k[i];
-    }
-
-    let mut inner = Vec::with_capacity(BLOCK_SIZE + message.len());
-
-    inner.extend_from_slice(&ipad);
-    inner.extend_from_slice(message);
-
-    let inner_hash = sha256(&inner);
-
-    let mut outer = Vec::with_capacity(BLOCK_SIZE + inner_hash.len());
-
-    outer.extend_from_slice(&opad);
-    outer.extend_from_slice(&inner_hash);
-
-    sha256(&outer)
 }
