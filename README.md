@@ -27,3 +27,7 @@ cargo build --locked --release
 - Провести interoperability и fuzz-тесты перед использованием как инфраструктурного компонента.
 
 Статус: исследовательская разработка, не готовый SDK. Лицензия: [AGPL-3.0](LICENSE). [English](README.en.md).
+
+## Авторство
+
+Сопровождающий собственных изменений: **Ivan Zorin (localzet)** — <creator@localzet.com> · https://www.localzet.com. Copyright © 2026 Localzet Group. Исходное авторство и лицензии сторонних компонентов сохраняются. См. [AUTHORS](.github/AUTHORS.md).

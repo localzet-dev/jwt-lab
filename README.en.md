@@ -18,3 +18,7 @@ Initialization generates a 256-bit random key using exclusive file creation. Exi
 Verified with Rust 1.98.1. Four tests cover an RFC 4231 HMAC vector, issue/verify, rejection of wrong keys/algorithms/issuers/expired tokens and exclusive key creation.
 
 Remaining work: specify LWT format and threat model; isolate and verify unused draft JOSE models; add application audience/authorization policy; add interoperability and fuzz tests. This is research work, not a production SDK. License: [AGPL-3.0](LICENSE).
+
+## Авторство
+
+Сопровождающий собственных изменений: **Ivan Zorin (localzet)** — <creator@localzet.com> · https://www.localzet.com. Copyright © 2026 Localzet Group. Исходное авторство и лицензии сторонних компонентов сохраняются. См. [AUTHORS](.github/AUTHORS.md).
