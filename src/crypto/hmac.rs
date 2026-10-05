@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Ivan Zorin <creator@localzet.com> (Localzet contributions)
+// SPDX-License-Identifier: AGPL-3.0
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 

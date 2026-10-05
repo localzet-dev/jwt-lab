@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Ivan Zorin <creator@localzet.com> (Localzet contributions)
+// SPDX-License-Identifier: AGPL-3.0
 mod algorithm;
 mod b64u;
 mod crypto;
